@@ -134,29 +134,82 @@ class Compile(Tool):
 
 
 class Run(Tool):
-    async def _wait_for_program_or_user_cancel(self, hub) -> None:
+    async def _watch_for_script_changes(
+        self,
+        script_path: str,
+        changed_event: asyncio.Event,
+        stop_event: asyncio.Event,
+    ) -> None:
+        last_mtime = os.stat(script_path).st_mtime_ns
+
+        while not stop_event.is_set():
+            await asyncio.sleep(0.25)
+            try:
+                current_mtime = os.stat(script_path).st_mtime_ns
+            except FileNotFoundError:
+                continue
+
+            if current_mtime != last_mtime:
+                last_mtime = current_mtime
+                changed_event.set()
+
+    async def _wait_for_program_or_user_cancel(self, hub, script_path: str) -> None:
         if not sys.stdin.isatty():
             await hub._wait_for_user_program_stop()
             return
 
-        print("Programm läuft. Drück Enter, um es vom PC aus zu stoppen.")
+        print("Programm läuft. Enter = stoppen + neu hochladen. Ctrl+C = beenden.")
 
-        wait_task = asyncio.create_task(hub._wait_for_user_program_stop())
-        input_task = asyncio.create_task(asyncio.to_thread(input))
-
-        done, pending = await asyncio.wait(
-            {wait_task, input_task},
-            return_when=asyncio.FIRST_COMPLETED,
+        changed_event = asyncio.Event()
+        stop_watch_event = asyncio.Event()
+        watch_task = asyncio.create_task(
+            self._watch_for_script_changes(script_path, changed_event, stop_watch_event)
         )
+        running = True
 
-        for task in pending:
-            task.cancel()
+        try:
+            while True:
+                input_task = asyncio.create_task(asyncio.to_thread(input))
+                change_task = asyncio.create_task(changed_event.wait())
+                tasks = {input_task, change_task}
+                wait_task = None
 
-        if input_task in done:
-            await hub.stop_user_program()
-            await hub._wait_for_user_program_stop()
-        else:
-            await wait_task
+                if running:
+                    wait_task = asyncio.create_task(hub._wait_for_user_program_stop())
+                    tasks.add(wait_task)
+
+                done, pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                for task in pending:
+                    task.cancel()
+
+                if change_task in done:
+                    changed_event.clear()
+                    print("Datei geändert. Drück Enter zum Neuhochladen.")
+                    continue
+
+                if input_task in done:
+                    if running:
+                        await hub.stop_user_program()
+                        await hub._wait_for_user_program_stop()
+                    await hub.run(script_path, wait=False)
+                    changed_event.clear()
+                    running = True
+                    print("Neu hochgeladen und gestartet.")
+                    continue
+
+                if wait_task is not None and wait_task in done:
+                    await wait_task
+                    running = False
+                    print("Programm beendet. Drück Enter, um den aktuellen Stand neu hochzuladen.")
+        finally:
+            stop_watch_event.set()
+            watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_task
 
     def add_parser(self, subparsers: argparse._SubParsersAction):
         parser = subparsers.add_parser(
@@ -207,9 +260,10 @@ class Run(Tool):
         )
 
         parser.add_argument(
-            "--hmac-secret",
-            metavar="<secret>",
-            help="shared secret for experimental BLE HMAC challenge authentication",
+            "--auth-code",
+            metavar="<00-99>",
+            help="two-digit auth code currently shown on the hub; if omitted, pybricksdev asks interactively",
+            type=int,
         )
 
     async def run(self, args: argparse.Namespace):
@@ -222,10 +276,10 @@ class Run(Tool):
             # It is a Pybricks Hub with BLE. Device name or address is given.
             print(f"Searching for {args.name or 'any hub with Pybricks service'}...")
             device_or_address = await find_ble(args.name)
-            hmac_secret = getattr(args, "hmac_secret", None)
+            auth_code = getattr(args, "auth_code", None)
             hub = (
-                PybricksHubBLE(device_or_address, hmac_secret=hmac_secret)
-                if hmac_secret is not None
+                PybricksHubBLE(device_or_address, auth_code=auth_code)
+                if auth_code is not None
                 else PybricksHubBLE(device_or_address)
             )
         elif args.conntype == "usb":
@@ -274,7 +328,7 @@ class Run(Tool):
                 if args.start:
                     if args.wait and not args.stay_connected:
                         await hub.run(script_path, wait=False)
-                        await self._wait_for_program_or_user_cancel(hub)
+                        await self._wait_for_program_or_user_cancel(hub, script_path)
                     else:
                         await hub.run(script_path, args.wait or args.stay_connected)
                 else:
@@ -306,10 +360,10 @@ class Run(Tool):
                         f"Searching for {args.name or 'any hub with Pybricks service'}..."
                     )
                     device_or_address = await find_ble(args.name)
-                    hmac_secret = getattr(args, "hmac_secret", None)
+                    auth_code = getattr(args, "auth_code", None)
                     hub = (
-                        PybricksHubBLE(device_or_address, hmac_secret=hmac_secret)
-                        if hmac_secret is not None
+                        PybricksHubBLE(device_or_address, auth_code=auth_code)
+                        if auth_code is not None
                         else PybricksHubBLE(device_or_address)
                     )
                 elif args.conntype == "usb":

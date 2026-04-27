@@ -47,19 +47,19 @@ class TestRun:
             assert args.conntype == "ble"
             assert args.file.name == "test.py"
             assert args.name is None
-            assert args.hmac_secret is None
+            assert args.auth_code is None
 
-        # Test with optional HMAC secret argument
+        # Test with optional auth code argument
         mock_file = mock_open(read_data="print('test')")
         mock_file.return_value.name = "test.py"
         with patch("builtins.open", mock_file):
             args = parser.parse_args([
                 "ble",
                 "test.py",
-                "--hmac-secret",
-                "test-secret",
+                "--auth-code",
+                "42",
             ])
-            assert args.hmac_secret == "test-secret"
+            assert args.auth_code == 42
 
         # Test with optional name argument
         mock_file = mock_open(read_data="print('test')")
@@ -314,21 +314,34 @@ class TestRun:
             mock_hub.disconnect.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_wait_for_program_or_user_cancel_stops_from_console(self):
-        """Test that pressing Enter in the console stops the running hub program."""
+    async def test_wait_for_program_or_user_cancel_restarts_from_console(self):
+        """Test that pressing Enter stops and re-runs the current script."""
         mock_hub = AsyncMock()
         mock_hub._wait_for_user_program_stop = AsyncMock()
         mock_hub.stop_user_program = AsyncMock()
+        mock_hub.run = AsyncMock(side_effect=KeyboardInterrupt())
 
         run_cmd = Run()
 
-        with (
-            patch("sys.stdin.isatty", return_value=True),
-            patch("asyncio.to_thread", new=AsyncMock(return_value="")),
-        ):
-            await run_cmd._wait_for_program_or_user_cancel(mock_hub)
+        with contextlib.ExitStack() as stack:
+            temp = stack.enter_context(
+                tempfile.NamedTemporaryFile(
+                    suffix=".py", mode="w+", delete=False, encoding="utf-8"
+                )
+            )
+            temp.write("print('test')")
+            temp_path = temp.name
+            stack.callback(os.unlink, temp_path)
+
+            with (
+                patch("sys.stdin.isatty", return_value=True),
+                patch("asyncio.to_thread", new=AsyncMock(return_value="")),
+            ):
+                with pytest.raises(KeyboardInterrupt):
+                    await run_cmd._wait_for_program_or_user_cancel(mock_hub, temp_path)
 
         mock_hub.stop_user_program.assert_called_once()
+        mock_hub.run.assert_called_once_with(temp_path, wait=False)
 
     @pytest.mark.asyncio
     async def test_wait_for_program_or_user_cancel_non_interactive_waits_only(self):
@@ -340,7 +353,7 @@ class TestRun:
         run_cmd = Run()
 
         with patch("sys.stdin.isatty", return_value=False):
-            await run_cmd._wait_for_program_or_user_cancel(mock_hub)
+            await run_cmd._wait_for_program_or_user_cancel(mock_hub, "test.py")
 
         mock_hub._wait_for_user_program_stop.assert_called_once()
         mock_hub.stop_user_program.assert_not_called()

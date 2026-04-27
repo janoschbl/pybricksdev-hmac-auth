@@ -136,7 +136,7 @@ class Command(IntEnum):
 
     AUTH_RESPONSE = 8
     """
-    Responds to an experimental HMAC authentication challenge.
+    Responds to an experimental two-digit authentication challenge.
     """
 
 
@@ -204,7 +204,7 @@ class Event(IntEnum):
 
     AUTH_CHALLENGE = 4
     """
-    Experimental HMAC authentication challenge from the hub.
+    Experimental authentication challenge from the hub.
     """
 
 

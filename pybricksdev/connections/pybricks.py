@@ -3,11 +3,10 @@
 
 import asyncio
 import contextlib
-import hashlib
-import hmac
 import logging
 import os
 import struct
+import sys
 from typing import Awaitable, Callable, TypeVar
 
 import reactivex.operators as op
@@ -141,8 +140,8 @@ class PybricksHub:
         self._running_program = 0
         self._num_of_slots = 0
         self._selected_slot = 0
-        self._hmac_secret: bytes | None = None
-        self._auth_challenge_queue = asyncio.Queue[bytes]()
+        self._auth_code: int | None = None
+        self._auth_challenge_queue = asyncio.Queue[None]()
 
         # whether to enable line handler features or not
         self._enable_line_handler = False
@@ -287,7 +286,7 @@ class PybricksHub:
             if self._enable_line_handler:
                 self._handle_line_data(payload)
         elif data[0] == Event.AUTH_CHALLENGE:
-            self._auth_challenge_queue.put_nowait(bytes(data[1:]))
+            self._auth_challenge_queue.put_nowait(None)
 
     def _handle_disconnect(self):
         logger.info("Disconnected!")
@@ -314,26 +313,39 @@ class PybricksHub:
             await self.start_notify(
                 PYBRICKS_COMMAND_EVENT_UUID, self._pybricks_service_handler
             )
-            await self.authenticate_hmac()
+            await self.authenticate()
 
             self.connection_state_observable.on_next(ConnectionState.CONNECTED)
 
             # don't unwind on success
             stack.pop_all()
 
-    async def authenticate_hmac(self) -> None:
-        """Authenticate against hubs using the experimental HMAC challenge."""
-        if self._hmac_secret is None:
-            return
-
-        challenge = await asyncio.wait_for(
+    async def authenticate(self) -> None:
+        """Authenticate against hubs using the experimental two-digit auth code."""
+        await asyncio.wait_for(
             self.race_disconnect(self._auth_challenge_queue.get()),
             timeout=5,
         )
-        digest = hmac.new(self._hmac_secret, challenge, hashlib.sha256).digest()
+
+        code = self._auth_code
+        if code is None:
+            if not sys.stdin.isatty():
+                raise RuntimeError(
+                    "Hub requested an auth code, but no --auth-code was provided in non-interactive mode."
+                )
+
+            raw_code = await asyncio.to_thread(input, "Code auf dem Hub eingeben (00-99): ")
+            try:
+                code = int(raw_code.strip(), 10)
+            except ValueError as exc:
+                raise RuntimeError("Auth code muss eine Zahl zwischen 0 und 99 sein.") from exc
+
+        if code < 0 or code > 99:
+            raise RuntimeError("Auth code muss zwischen 0 und 99 liegen.")
+
         await self.write_gatt_char(
             PYBRICKS_COMMAND_EVENT_UUID,
-            bytes([Command.AUTH_RESPONSE]) + digest,
+            bytes([Command.AUTH_RESPONSE, code]),
             response=True,
         )
 
@@ -849,13 +861,11 @@ class PybricksHubBLE(PybricksHub):
     _device: BLEDevice
     _client: BleakClient
 
-    def __init__(self, device: BLEDevice, hmac_secret: str | bytes | None = None):
+    def __init__(self, device: BLEDevice, auth_code: int | None = None):
         super().__init__()
 
         self._device = device
-        if isinstance(hmac_secret, str):
-            hmac_secret = hmac_secret.encode()
-        self._hmac_secret = hmac_secret
+        self._auth_code = auth_code
 
         def handle_disconnect(_: BleakClient):
             self._handle_disconnect()

@@ -2,8 +2,6 @@
 
 import asyncio
 import contextlib
-import hashlib
-import hmac
 import os
 import tempfile
 from unittest.mock import AsyncMock, PropertyMock, patch
@@ -27,37 +25,51 @@ class TestPybricksHub:
     """Tests for the PybricksHub base class functionality."""
 
     @pytest.mark.asyncio
-    async def test_hmac_authentication_sends_response_for_challenge(self):
-        """Test that a configured HMAC secret signs auth challenges."""
-        hub = PybricksHubBLE("mock_device", hmac_secret="test-secret")
+    async def test_pin_authentication_sends_response_for_challenge(self):
+        """Test that a configured auth code is sent after an auth challenge."""
+        hub = PybricksHubBLE("mock_device", auth_code=42)
         hub.write_gatt_char = AsyncMock()
 
-        challenge = bytes(range(16))
-        hub._pybricks_service_handler(
-            0,
-            bytes([Event.AUTH_CHALLENGE]) + challenge,
-        )
+        hub._pybricks_service_handler(0, bytes([Event.AUTH_CHALLENGE]))
 
-        await hub.authenticate_hmac()
+        await hub.authenticate()
 
-        expected_digest = hmac.new(
-            b"test-secret",
-            challenge,
-            hashlib.sha256,
-        ).digest()
         hub.write_gatt_char.assert_called_once_with(
             PYBRICKS_COMMAND_EVENT_UUID,
-            bytes([Command.AUTH_RESPONSE]) + expected_digest,
+            bytes([Command.AUTH_RESPONSE, 42]),
             response=True,
         )
 
     @pytest.mark.asyncio
-    async def test_hmac_authentication_requires_secret(self):
-        """Test that HMAC authentication is skipped unless a secret is configured."""
+    async def test_pin_authentication_prompts_for_code_when_missing(self):
+        """Test that interactive auth prompts for the code shown on the hub."""
         hub = PybricksHubBLE("mock_device")
         hub.write_gatt_char = AsyncMock()
 
-        await hub.authenticate_hmac()
+        hub._pybricks_service_handler(0, bytes([Event.AUTH_CHALLENGE]))
+
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("asyncio.to_thread", new=AsyncMock(return_value="07")),
+        ):
+            await hub.authenticate()
+
+        hub.write_gatt_char.assert_called_once_with(
+            PYBRICKS_COMMAND_EVENT_UUID,
+            bytes([Command.AUTH_RESPONSE, 7]),
+            response=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pin_authentication_requires_code_for_non_interactive_use(self):
+        """Test that non-interactive auth fails unless an auth code is configured."""
+        hub = PybricksHubBLE("mock_device")
+        hub.write_gatt_char = AsyncMock()
+        hub._pybricks_service_handler(0, bytes([Event.AUTH_CHALLENGE]))
+
+        with patch("sys.stdin.isatty", return_value=False):
+            with pytest.raises(RuntimeError, match="auth code"):
+                await hub.authenticate()
 
         hub.write_gatt_char.assert_not_called()
 
