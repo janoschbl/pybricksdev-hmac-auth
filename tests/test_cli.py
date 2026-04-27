@@ -47,6 +47,19 @@ class TestRun:
             assert args.conntype == "ble"
             assert args.file.name == "test.py"
             assert args.name is None
+            assert args.hmac_secret is None
+
+        # Test with optional HMAC secret argument
+        mock_file = mock_open(read_data="print('test')")
+        mock_file.return_value.name = "test.py"
+        with patch("builtins.open", mock_file):
+            args = parser.parse_args([
+                "ble",
+                "test.py",
+                "--hmac-secret",
+                "test-secret",
+            ])
+            assert args.hmac_secret == "test-secret"
 
         # Test with optional name argument
         mock_file = mock_open(read_data="print('test')")

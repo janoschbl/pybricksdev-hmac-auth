@@ -182,6 +182,12 @@ class Run(Tool):
             default=False,
         )
 
+        parser.add_argument(
+            "--hmac-secret",
+            metavar="<secret>",
+            help="shared secret for experimental BLE HMAC challenge authentication",
+        )
+
     async def run(self, args: argparse.Namespace):
 
         # Pick the right connection
@@ -192,7 +198,12 @@ class Run(Tool):
             # It is a Pybricks Hub with BLE. Device name or address is given.
             print(f"Searching for {args.name or 'any hub with Pybricks service'}...")
             device_or_address = await find_ble(args.name)
-            hub = PybricksHubBLE(device_or_address)
+            hmac_secret = getattr(args, "hmac_secret", None)
+            hub = (
+                PybricksHubBLE(device_or_address, hmac_secret=hmac_secret)
+                if hmac_secret is not None
+                else PybricksHubBLE(device_or_address)
+            )
         elif args.conntype == "usb":
             from usb.core import find as find_usb
 
@@ -267,7 +278,12 @@ class Run(Tool):
                         f"Searching for {args.name or 'any hub with Pybricks service'}..."
                     )
                     device_or_address = await find_ble(args.name)
-                    hub = PybricksHubBLE(device_or_address)
+                    hmac_secret = getattr(args, "hmac_secret", None)
+                    hub = (
+                        PybricksHubBLE(device_or_address, hmac_secret=hmac_secret)
+                        if hmac_secret is not None
+                        else PybricksHubBLE(device_or_address)
+                    )
                 elif args.conntype == "usb":
                     device_or_address = find_usb(custom_match=is_pybricks_usb)
                     hub = PybricksHubUSB(device_or_address)

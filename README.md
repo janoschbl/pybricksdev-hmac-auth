@@ -39,6 +39,10 @@ Then use `pipx` to run `pybricksdev`:
 
     pipx run pybricksdev ...
 
+For this HMAC auth fork, install directly from GitHub with pip:
+
+    python3 -m pip install git+https://github.com/janoschbl/pybricksdev-hmac-auth.git
+
 [pipx]: https://pipxproject.github.io/pipx/
 [pipx installation]: https://pipxproject.github.io/pipx/installation/
 

@@ -3,6 +3,8 @@
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import logging
 import os
 import struct
@@ -139,6 +141,8 @@ class PybricksHub:
         self._running_program = 0
         self._num_of_slots = 0
         self._selected_slot = 0
+        self._hmac_secret: bytes | None = None
+        self._auth_challenge_queue = asyncio.Queue[bytes]()
 
         # whether to enable line handler features or not
         self._enable_line_handler = False
@@ -282,6 +286,8 @@ class PybricksHub:
 
             if self._enable_line_handler:
                 self._handle_line_data(payload)
+        elif data[0] == Event.AUTH_CHALLENGE:
+            self._auth_challenge_queue.put_nowait(bytes(data[1:]))
 
     def _handle_disconnect(self):
         logger.info("Disconnected!")
@@ -308,11 +314,28 @@ class PybricksHub:
             await self.start_notify(
                 PYBRICKS_COMMAND_EVENT_UUID, self._pybricks_service_handler
             )
+            await self.authenticate_hmac()
 
             self.connection_state_observable.on_next(ConnectionState.CONNECTED)
 
             # don't unwind on success
             stack.pop_all()
+
+    async def authenticate_hmac(self) -> None:
+        """Authenticate against hubs using the experimental HMAC challenge."""
+        if self._hmac_secret is None:
+            return
+
+        challenge = await asyncio.wait_for(
+            self.race_disconnect(self._auth_challenge_queue.get()),
+            timeout=5,
+        )
+        digest = hmac.new(self._hmac_secret, challenge, hashlib.sha256).digest()
+        await self.write_gatt_char(
+            PYBRICKS_COMMAND_EVENT_UUID,
+            bytes([Command.AUTH_RESPONSE]) + digest,
+            response=True,
+        )
 
     async def disconnect(self):
         logger.info("Disconnecting...")
@@ -826,10 +849,13 @@ class PybricksHubBLE(PybricksHub):
     _device: BLEDevice
     _client: BleakClient
 
-    def __init__(self, device: BLEDevice):
+    def __init__(self, device: BLEDevice, hmac_secret: str | bytes | None = None):
         super().__init__()
 
         self._device = device
+        if isinstance(hmac_secret, str):
+            hmac_secret = hmac_secret.encode()
+        self._hmac_secret = hmac_secret
 
         def handle_disconnect(_: BleakClient):
             self._handle_disconnect()

@@ -134,6 +134,11 @@ class Command(IntEnum):
     .. availability:: Since Pybricks protocol v1.3.0.
     """
 
+    AUTH_RESPONSE = 8
+    """
+    Responds to an experimental HMAC authentication challenge.
+    """
+
 
 class CommandError(IntEnum):
     """
@@ -195,6 +200,11 @@ class Event(IntEnum):
     the hub.
 
     .. availability:: Since Pybricks protocol v1.3.0.
+    """
+
+    AUTH_CHALLENGE = 4
+    """
+    Experimental HMAC authentication challenge from the hub.
     """
 
 

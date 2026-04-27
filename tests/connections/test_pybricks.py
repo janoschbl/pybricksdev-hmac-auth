@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import os
 import tempfile
 from unittest.mock import AsyncMock, PropertyMock, patch
@@ -13,6 +15,9 @@ from pybricksdev.connections.pybricks import (
     ConnectionState,
     HubCapabilityFlag,
     HubKind,
+    PYBRICKS_COMMAND_EVENT_UUID,
+    Command,
+    Event,
     PybricksHubBLE,
     StatusFlag,
 )
@@ -20,6 +25,41 @@ from pybricksdev.connections.pybricks import (
 
 class TestPybricksHub:
     """Tests for the PybricksHub base class functionality."""
+
+    @pytest.mark.asyncio
+    async def test_hmac_authentication_sends_response_for_challenge(self):
+        """Test that a configured HMAC secret signs auth challenges."""
+        hub = PybricksHubBLE("mock_device", hmac_secret="test-secret")
+        hub.write_gatt_char = AsyncMock()
+
+        challenge = bytes(range(16))
+        hub._pybricks_service_handler(
+            0,
+            bytes([Event.AUTH_CHALLENGE]) + challenge,
+        )
+
+        await hub.authenticate_hmac()
+
+        expected_digest = hmac.new(
+            b"test-secret",
+            challenge,
+            hashlib.sha256,
+        ).digest()
+        hub.write_gatt_char.assert_called_once_with(
+            PYBRICKS_COMMAND_EVENT_UUID,
+            bytes([Command.AUTH_RESPONSE]) + expected_digest,
+            response=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_hmac_authentication_requires_secret(self):
+        """Test that HMAC authentication is skipped unless a secret is configured."""
+        hub = PybricksHubBLE("mock_device")
+        hub.write_gatt_char = AsyncMock()
+
+        await hub.authenticate_hmac()
+
+        hub.write_gatt_char.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_download_modern_protocol(self):
