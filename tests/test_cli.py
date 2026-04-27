@@ -310,8 +310,40 @@ class TestRun:
             # Verify the hub was created and used correctly
             mock_hub_class.assert_called_once_with("mock_device")
             mock_hub.connect.assert_called_once()
-            mock_hub.run.assert_called_once_with(temp_path, True)
+            mock_hub.run.assert_called_once_with(temp_path, wait=False)
             mock_hub.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_program_or_user_cancel_stops_from_console(self):
+        """Test that pressing Enter in the console stops the running hub program."""
+        mock_hub = AsyncMock()
+        mock_hub._wait_for_user_program_stop = AsyncMock()
+        mock_hub.stop_user_program = AsyncMock()
+
+        run_cmd = Run()
+
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("asyncio.to_thread", new=AsyncMock(return_value="")),
+        ):
+            await run_cmd._wait_for_program_or_user_cancel(mock_hub)
+
+        mock_hub.stop_user_program.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_program_or_user_cancel_non_interactive_waits_only(self):
+        """Test that non-interactive terminals just wait for the hub program to stop."""
+        mock_hub = AsyncMock()
+        mock_hub._wait_for_user_program_stop = AsyncMock()
+        mock_hub.stop_user_program = AsyncMock()
+
+        run_cmd = Run()
+
+        with patch("sys.stdin.isatty", return_value=False):
+            await run_cmd._wait_for_program_or_user_cancel(mock_hub)
+
+        mock_hub._wait_for_user_program_stop.assert_called_once()
+        mock_hub.stop_user_program.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_usb(self):
@@ -357,7 +389,7 @@ class TestRun:
             # Verify the hub was created and used correctly
             mock_hub_class.assert_called_once_with("mock_device")
             mock_hub.connect.assert_called_once()
-            mock_hub.run.assert_called_once_with(temp_path, True)
+            mock_hub.run.assert_called_once_with(temp_path, wait=False)
             mock_hub.disconnect.assert_called_once()
 
     @pytest.mark.asyncio
@@ -405,7 +437,7 @@ class TestRun:
             # Verify the hub was created and used correctly
             mock_hub_class.assert_called_once_with("mock_device")
             mock_hub.connect.assert_called_once()
-            mock_hub.run.assert_called_once_with("<stdin>", True)
+            mock_hub.run.assert_called_once_with("<stdin>", wait=False)
             mock_hub.disconnect.assert_called_once()
 
     @pytest.mark.asyncio

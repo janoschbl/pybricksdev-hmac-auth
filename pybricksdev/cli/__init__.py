@@ -134,6 +134,30 @@ class Compile(Tool):
 
 
 class Run(Tool):
+    async def _wait_for_program_or_user_cancel(self, hub) -> None:
+        if not sys.stdin.isatty():
+            await hub._wait_for_user_program_stop()
+            return
+
+        print("Programm läuft. Drück Enter, um es vom PC aus zu stoppen.")
+
+        wait_task = asyncio.create_task(hub._wait_for_user_program_stop())
+        input_task = asyncio.create_task(asyncio.to_thread(input))
+
+        done, pending = await asyncio.wait(
+            {wait_task, input_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        if input_task in done:
+            await hub.stop_user_program()
+            await hub._wait_for_user_program_stop()
+        else:
+            await wait_task
+
     def add_parser(self, subparsers: argparse._SubParsersAction):
         parser = subparsers.add_parser(
             "run",
@@ -248,7 +272,11 @@ class Run(Tool):
         try:
             with _get_script_path(args.file) as script_path:
                 if args.start:
-                    await hub.run(script_path, args.wait or args.stay_connected)
+                    if args.wait and not args.stay_connected:
+                        await hub.run(script_path, wait=False)
+                        await self._wait_for_program_or_user_cancel(hub)
+                    else:
+                        await hub.run(script_path, args.wait or args.stay_connected)
                 else:
                     if args.stay_connected:
                         # if the user later starts the program by pressing the button on the hub,
